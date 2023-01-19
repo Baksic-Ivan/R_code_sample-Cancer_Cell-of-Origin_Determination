@@ -1,0 +1,140 @@
+---
+title: '**R Code sample part 1**'
+author: "Ivan Baksic"
+date:
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+## 1) Creating 1Mb reference genome windows
+
+In this part I demonstrated reference genome filtration and division into 1Mb windows.
+
+Packages used
+```{r}
+library(dplyr)
+library(tidyr)
+library(IRanges)
+library(GenomicRanges)
+library(data.table)
+```
+
+
+Since hg19_umap.csv (genome uniquely mappable regions downloaded from: https://bismap.hoffmanlab.org/) had 400001214 lines, I made recursive function and loaded and filtered chunks of 10M lines.
+As an example, I read 24.2Mb file the same way (chunks of 100k lines):
+```{r}
+my_reference <- function(final_number, 
+                         skip_number, 
+                         my_ranges = GRanges(), 
+                         my_skip = 1){
+  my_chunk <- fread("https://raw.githubusercontent.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/main/hg19_umap_sample.csv",
+                    skip = my_skip, 
+                    nrows = skip_number) %>%
+    .[V4 >= 0.92]
+  # excluded regions with fraction of uniquely mappable 36-mers lower than 0.92
+  
+  my_chunk_regions <- GRanges(seqnames = my_chunk$V1, 
+                              ranges = IRanges(start = my_chunk$V2, 
+                                               end = my_chunk$V3)) %>%
+    reduce(.)
+  
+  my_result <- union(my_ranges, my_chunk_regions)
+  
+  if (my_skip == final_number-skip_number)
+    return(my_result) else
+      my_reference(final_number, 
+                   skip_number, 
+                   my_ranges = my_result, 
+                   my_skip = my_skip + skip_number)
+}
+
+Umap_k36_hg19 <- my_reference(900001, 100000)
+Umap_k36_hg19
+```
+I additionally removed centromere and telomere regions:
+```{r}
+centromere_telomere_hg19 <- read.table("https://raw.githubusercontent.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/main/hg19_centromere_telomere", 
+                                       header = F)
+
+centromere_telomere_hg19_ranges <- GRanges(seqnames = centromere_telomere_hg19$V2,
+                                           # one-based coordinate system to zero-based coordinate system transformation
+                                           ranges = IRanges(start = centromere_telomere_hg19$V3 - 1,
+                                                            end = centromere_telomere_hg19$V4))
+
+filtered_reference_hg19 <- setdiff(Umap_k36_hg19, centromere_telomere_hg19_ranges)
+filtered_reference_hg19
+```
+Algorithm that divides filtered hg19 reference to 1Mb windows:
+```{r}
+# function to add 160 ranges till 1Mb is surpassed
+to_million_by_160 <- function(width_vector, count = 1, my_sum = 0) {
+  new_sum = my_sum + sum(width_vector[count:(count+159)])
+  if (new_sum >= 1000000) {
+      return(list(count - 1, my_sum))
+      } else {
+        to_million_by_160(width_vector, count = count + 160, my_sum = new_sum)
+      }
+}
+
+# function to add 1 range till 1Mb is surpassed
+to_million_by_1 <- function(width_vector, count, my_sum) {
+  new_sum = my_sum + width_vector[count + 1]
+  if (new_sum >= 1000000)
+    return(list(count, my_sum)) else
+      to_million_by_1(width_vector, count = count + 1, my_sum = new_sum)
+}
+
+
+create_windows <- function (input_ranges, output = GRangesList()) {
+  
+  if (sum(width(input_ranges)) >= 1000000) {
+    
+    #first I add 160 ranges at the time to surpass 1Mb and then I add one at the time to surpass 1Mb
+    broad <- to_million_by_160(width(input_ranges))
+    narrow <- to_million_by_1(width(input_ranges), broad[[1]], broad[[2]])
+    final_range <- narrow[[1]] + 1
+    
+    #missing bases are the ones needed to reach 1Mb
+    missing <- 1000000 - narrow[[2]]
+    
+    if (missing != 0) {
+      #I split final range that surpasses 1Mb in order to reach 1Mb and added the extra bases at the start of the next input
+      final_range_start <- GRanges(seqnames = seqnames(input_ranges[final_range]),
+                                   ranges = IRanges(start = start(input_ranges[final_range]),
+                                                    end = start(input_ranges[final_range]) + missing - 1))
+      final_range_end <- GRanges(seqnames = seqnames(input_ranges[final_range]),
+                                 ranges = IRanges(start = start(input_ranges[final_range]) + missing,
+                                                  end = end(input_ranges[final_range]) + missing))
+
+      new_input_ranges <- append(final_range_end,
+                                 input_ranges[-(1:final_range)])
+      million_chunk <- append(input_ranges[1:narrow[[1]]],
+                              final_range_start)
+      
+      #sometimes it can happen that the ranges add exactly to 1Mb, hence this else condition
+    } else {
+    new_input_ranges <- input_ranges[-(1:final_range)]
+    million_chunk <- input_ranges[1:narrow[[1]]]
+      }
+    new_output <- append(output,
+                         GRangesList(million_chunk))
+
+
+    create_windows(input_ranges = new_input_ranges, output = new_output)
+    } else return(output)
+}
+
+final_reference_hg19 <- create_windows(filtered_reference_hg19)
+```
+
+Reference genome divided into 4 1Mb windows and saved as GRangesList object.
+```{r}
+final_reference_hg19[[1]]
+final_reference_hg19[[2]]
+sapply(final_reference_hg19, function (x) sum(width(x))) %>%
+  table(.)
+```
+
