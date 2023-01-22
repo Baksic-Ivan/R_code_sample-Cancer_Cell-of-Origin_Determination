@@ -455,21 +455,23 @@ SKCA_BR_full_WGS_SNP_table_no_out &lt;- lapply(all_markers_ranges_count_template
                                               # add mutation window counts
                                               mutate(x, mutation = SKCA_BR_full_WGS_SNP_count) %&gt;%
                                                 select(., -c(ind, window_id)) %&gt;%
+                                                # remove all colums with NA
+                                                select_if(.,~any(!is.na(.))) %&gt;%
                                                 # filter out outlier mutation count observations
                                                 filter(., mutation &lt;= IQR(SKCA_BR_full_WGS_SNP_count)*1.5 + quantile(SKCA_BR_full_WGS_SNP_count, 0.75))
                                               })
 
 head(SKCA_BR_full_WGS_SNP_table_no_out[[1]])</code></pre>
-<pre><code>##   H3K27ac H3K9me3 H3K4me3 H3K4me1 H3K27me3 H3K36me3 H3K9ac mutation
-## 1     706    1662    1422      NA      486       NA     NA    12801
-## 2     190    2248     322      NA      504       NA     NA    12333
-## 3      78    2400     198      NA      348       NA     NA     5516
-## 4      54    2868      20      NA       22       NA     NA     4052
-## 5     392    1198     542      NA      484       NA     NA     7222
-## 6     486    1084     322      NA      490       NA     NA     4172</code></pre>
+<pre><code>##   H3K27ac H3K9me3 H3K4me3 H3K27me3 mutation
+## 1     706    1662    1422      486    12801
+## 2     190    2248     322      504    12333
+## 3      78    2400     198      348     5516
+## 4      54    2868      20       22     4052
+## 5     392    1198     542      484     7222
+## 6     486    1084     322      490     4172</code></pre>
 <p>This reduced the number of windows to 1993.</p>
 <pre class="r"><code>dim(SKCA_BR_full_WGS_SNP_table_no_out[[1]])</code></pre>
-<pre><code>## [1] 1993    8</code></pre>
+<pre><code>## [1] 1993    5</code></pre>
 <p>I used created list of dataframes to built machine learning models in
 part 4.</p>
 </div>
