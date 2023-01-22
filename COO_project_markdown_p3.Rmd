@@ -1,0 +1,95 @@
+---
+title: '**R Code sample part 2**'
+author: "Ivan Baksic"
+date:
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+## 3) Downloading melanoma single based substitution mutation type (SKCA-BR) and counting overlaps
+
+In this part I downloaded melanoma SNP data, performed filtration and counted overlaps with each reference genome window created in part 1. Finally, I merged mentioned melanoma SNP window counts with mark counts created in part 2 for every biosample.
+
+Packages used
+```{r}
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(GenomicRanges)
+library(ggplot2)
+```
+
+From ICGC DCC Data Portal Release 28 I downloaded melanoma mutations SKCA-BR data set and filtered it.  
+Here, I filtered SKCA-BR subset as an example:
+```{r}
+SKCA_BR_sample <- fread("https://raw.githubusercontent.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/main/simple_somatic_mutation.open.SKCA-BR_sample.csv")
+
+#filter Whole Genome Sequencing strategy and single base substitution mutation type
+SKCA_BR_sample_WGS_SNP <- filter(SKCA_BR_sample,
+                                 sequencing_strategy == "WGS",
+                                 mutation_type == "single base substitution") %>%
+  
+  # create columns for GRanges
+  mutate(.,
+         chromosome = paste("chr", chromosome, sep = ""), 
+         start = chromosome_start, 
+         end = chromosome_end) %>%
+  
+  #select only relevant columns
+  select(.,
+         chromosome, 
+         start, 
+         end) %>%
+  GRanges(.)
+
+SKCA_BR_sample_WGS_SNP
+
+```
+
+Filtering whole SKCA-BR data set results in the following:
+```{r}
+SKCA_BR_full_WGS_SNP <- readRDS(url("https://github.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/raw/main/SKCA_BR_full_WGS_SNP_no_mcols.RDS"))
+SKCA_BR_full_WGS_SNP
+```
+I counted overlaps between filtered dataset and reference genome windows and created count boxplot.
+```{r}
+final_reference_hg19_2128 <- readRDS(url("https://github.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/raw/main/final_reference_hg19_2128.RDS"))
+
+SKCA_BR_full_WGS_SNP_count <- countOverlaps(final_reference_hg19_2128, SKCA_BR_full_WGS_SNP)
+
+data.frame(SKCA_BR_full_WGS_SNP_count) %>%
+  mutate(., label = "SKCA_BR_full_WGS_SNP") %>%
+  ggplot(aes(x = label, y = SKCA_BR_full_WGS_SNP_count)) +
+  geom_boxplot() +
+  theme_bw() +
+  theme(aspect.ratio=8/3)
+```
+
+From the boxplot I noticed that there many data outliers. In my thesis I have demonstrated that excluding outliers can significantly improve results so I removed outliers in this example.  
+I added melanoma SNP data to chromatin mark data and filtered out outliers.
+```{r}
+all_markers_ranges_count_template_final <- read.csv("https://raw.githubusercontent.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/main/all_markers_ranges_count_template_final.csv")
+
+# create nested list with biosamples as names
+all_markers_ranges_count_template_final <- split(all_markers_ranges_count_template_final, all_markers_ranges_count_template_final$ind)
+
+SKCA_BR_full_WGS_SNP_table_no_out <- lapply(all_markers_ranges_count_template_final,
+                                            function (x) {
+                                              # add mutation window counts
+                                              mutate(x, mutation = SKCA_BR_full_WGS_SNP_count) %>%
+                                                select(., -c(ind, window_id)) %>%
+                                                # filter out outlier mutation count observations
+                                                filter(., mutation <= IQR(SKCA_BR_full_WGS_SNP_count)*1.5 + quantile(SKCA_BR_full_WGS_SNP_count, 0.75))
+                                              })
+
+head(SKCA_BR_full_WGS_SNP_table_no_out[[1]])
+```
+This reduced the number of windows to 1993.
+```{r}
+dim(SKCA_BR_full_WGS_SNP_table_no_out[[1]])
+```
+
+I used created list of dataframes to built machine learning models in part 4.
