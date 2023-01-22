@@ -81,6 +81,8 @@ SKCA_BR_full_WGS_SNP_table_no_out <- lapply(all_markers_ranges_count_template_fi
                                               # add mutation window counts
                                               mutate(x, mutation = SKCA_BR_full_WGS_SNP_count) %>%
                                                 select(., -c(ind, window_id)) %>%
+                                                # remove all colums with NA
+                                                select_if(.,~any(!is.na(.))) %>%
                                                 # filter out outlier mutation count observations
                                                 filter(., mutation <= IQR(SKCA_BR_full_WGS_SNP_count)*1.5 + quantile(SKCA_BR_full_WGS_SNP_count, 0.75))
                                               })
@@ -91,5 +93,6 @@ This reduced the number of windows to 1993.
 ```{r}
 dim(SKCA_BR_full_WGS_SNP_table_no_out[[1]])
 ```
+
 
 I used created list of dataframes to built machine learning models in part 4.
