@@ -1,0 +1,243 @@
+---
+title: '**R Code sample part 2**'
+author: "Ivan Baksic"
+date:
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+## 2) Downloading chromatin data and counting overlaps
+
+In this part I downloaded chromatin data from DeepBlue epigenomic data server using DeepBlueR for seven histone modifications: H3K27ac, H3K27me3, H3K36me3, H3K4me1, H3K4me3, H3K9ac and H3K9me3.
+I dowloded data for 15 ENCODE cell types and 89 Roadmap Epigenomics cell types and counted overlaps with reference genome 1Mb windows created in previous part.
+
+Packages used
+```{r}
+library(dplyr)
+library(tidyr)
+library(DeepBlueR)
+library(data.table)
+library(IRanges)
+library(GenomicRanges)
+```
+
+### Deep Blue data extraction and filtration
+
+I listed Deep Blue sources.
+```{r}
+db_all_samples <- deepblue_list_samples()
+db_all_samples$source %>% unique(.)
+```
+I selected only the ENCODE, Roadmap Epigenomics and DEEP (IHEC) projects
+```{r}
+ENCODE <- filter(db_all_samples, source == "ENCODE")
+Roadmap <- filter(db_all_samples, source == "Roadmap Epigenomics")
+IHEC <- filter(db_all_samples, source == "DEEP (IHEC)")
+```
+
+Since the data is not standardised, I removed redundant columns from each project data and identified biosource name column and biosample type column.  
+Example for ENCODE:
+```{r}
+ENCODE[, .SD, .SDcols = \(x) !any(is.na(x))] %>%
+  head(.)
+```
+For ENCODE biosource name was biosource_name and biosample type was biosample_type.  
+For Roadmap biosource name was EDACC_NAME and biosample type was TYPE.  
+For IHEC biosource name was biosource_name and biosample type was biomaterial_type.  
+
+I filtered each project data by biosample type and added biosource name and biosample type columns.
+```{r}
+type_filter_function <- function(data, biosource_name, biosample_type) {
+  type_filter <- c("primarycell", 
+                   "primarytissue", 
+                   "primarycelltissue", 
+                   "primarycellculture", 
+                   "primaryculture")
+  temp <- data[[biosample_type]]
+  temp2 <- data[[biosource_name]]
+  result <- mutate(data, 
+                   Final.type = gsub(" ", "", temp) %>%
+                    tolower(.), 
+                   Final.name  = temp2) %>%
+    filter(., Final.type %in% type_filter) %>%
+  return(result)
+}
+
+ENCODE_filtered_types <- type_filter_function(ENCODE, "biosource_name", "biosample_type")
+Roadmap_filtered_types <- type_filter_function(Roadmap, "EDACC_NAME", "TYPE")
+IHEC_filtered_types <- type_filter_function(IHEC, "biosource_name", "biomaterial_type")
+```
+
+I combined all project data frames into one and kept only relevant columns.
+```{r}
+final_samples <- bind_rows(ENCODE_filtered_types,
+                           Roadmap_filtered_types,
+                           IHEC_filtered_types)
+# removed columns that contained any NA
+final_samples <- final_samples[, .SD, .SDcols = \(x) !any(is.na(x))]
+final_samples <- select(final_samples, -c("_id", "biosource_name", "user", "Final.type"))
+
+dim(final_samples)
+head(final_samples)
+```
+### Experiment data download
+
+In my thesis I gathered all experiments for each epigenetic mark from DeepBlue database.  
+Here, I will gather experiments for H3K9ac and H3K9me3 markers and first 50 samples:  
+WARNING: This may take a minute
+```{r}
+epigenetic_marks = c(#"H3K27ac",
+                     #"H3K27me3",
+                     #"H3K36me3",
+                     #"H3K4me1",
+                     #"H3K4me3",
+                     "H3K9ac",
+                     "H3K9me3")
+
+gather_experiments <- function(samples, marks, result_df = data.frame(), i = 1){
+  
+  # gather experiments for one epigenetic mark
+  all_experiments <- sapply(samples$id, function (x) {
+    suppressMessages(deepblue_list_experiments(genome = "hg19",
+                                               epigenetic_mark = marks[i],
+                                               type = "peaks",
+                                               sample = x))
+    }, simplify = F, USE.NAMES = TRUE)
+  
+  # remove all ids with no experiments and create dataframe from list
+  all_experiments <- all_experiments[all_experiments != "\n"] %>%
+    bind_rows(., .id = "sample_id") %>%
+    mutate(., mark = marks[i])
+  
+  
+  result <- rbind(result_df, all_experiments)
+  
+  if (i == length(epigenetic_marks)){
+    return(result)
+  } else {
+    gather_experiments(samples,
+                       marks,
+                       result_df = result,
+                       i = i + 1)
+  }
+}
+
+H3K9ac_H3K9me3_experiments <- gather_experiments(final_samples[1:50], epigenetic_marks)
+
+dim(H3K9ac_H3K9me3_experiments)
+head(H3K9ac_H3K9me3_experiments)
+```
+I loaded the data with all experiments.
+```{r}
+all_experiments <- read.csv("https://raw.githubusercontent.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/main/all_experiments.csv")
+dim(all_experiments)
+head(all_experiments)
+```
+
+### Further data filtration
+
+I removed all the cell types containing data for only one histone modification.
+```{r}
+filtered_sample_ids <- all_experiments %>%
+  select(sample_id, mark) %>%
+  unique(.) %>%
+  group_by(., sample_id) %>% 
+  summarise(total_count=n()) %>%
+  filter(., total_count != 1) %>%
+  .$sample_id
+
+final_samples_filtered_ids <- filter(final_samples, id %in% filtered_sample_ids)
+
+dim(final_samples_filtered_ids)
+head(final_samples_filtered_ids)
+```
+
+I manually excluded certain samples and formed 11 groups based on histological relationship between certain cell types.
+This resulted in the data frame containing 89 Roadmap Epigenomics cell types and 15 ENCODE cell types.
+```{r}
+biomarker_df <- read.csv("https://raw.githubusercontent.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/main/biomarker_list.csv")
+dim(biomarker_df)
+head(biomarker_df)
+```
+With this data frame ids I filtered all_experiments data frame.
+```{r}
+all_experiments_filtered <- filter(all_experiments, 
+                                   all_experiments$sample_id %in% biomarker_df$id)
+
+dim(all_experiments_filtered)
+head(all_experiments_filtered)
+```
+
+### Deep Blue chromatin peak download
+
+With gathered experiments I downloaded peak data from DeepBlue database for each epigenetic marker.
+In this example I will only download data for first two samples of H3K9ac marker:
+```{r}
+# create nested list from data frame with samples as names
+H3K9ac_experiments <- filter(all_experiments_filtered, mark == "H3K9ac") %>%
+  split(., .$sample_id)
+
+get_epigenom_data <- function(input, my_samples, gr = GRanges(), i = 1) {
+  
+  #dowload DeepBlue peak data
+  data_id <- deepblue_select_experiments(input[[i]]$name)
+  request_id <- deepblue_get_regions(query_id = data_id,
+                                             output_format = "CHROMOSOME,START,END,NAME,SCORE,STRAND,SIGNAL_VALUE,P_VALUE,Q_VALUE,PEAK")
+  request_data <- deepblue_download_request_data(request_id)
+  
+  #add meta columns to Grange object
+  mcols(request_data)$biosample <- my_samples[my_samples$id == names(input)[i],"Final.name"]
+  mcols(request_data)$group <- my_samples[my_samples$id == names(input)[i],"Final.group"]
+  mcols(request_data)$mark <- unique(input[[i]]$mark)
+  
+  new_gr <- append(gr, request_data)
+  
+  if (i == length(input)) return(new_gr) else {
+    get_epigenom_data(input, my_samples, gr = new_gr, i = i + 1)
+  }
+}
+
+H3K9ac_ranges_1to2 <- get_epigenom_data(H3K9ac_experiments[1:2], biomarker_df)
+
+length(H3K9ac_ranges_1to2)
+head(H3K9ac_ranges_1to2)
+
+```
+### Overlap count
+
+I counted number of overlaps between H3K9ac peak rage data and reference genome for every biosample.
+```{r}
+final_reference_hg19_2128 <- readRDS(url("https://github.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/raw/main/final_reference_hg19_2128.RDS"))
+
+count_ol <- function(mark_ranges, reference_genome){
+  
+  # extracted unique biosample vector
+  mark_ranges_biosample <- mark_ranges$biosample %>%
+    unique(.)
+  
+  #counted overlaps for each biosample
+  count <- sapply(mark_ranges_biosample, function (x) {
+    temp <- mark_ranges[mark_ranges$biosample == x]
+    result <- countOverlaps(reference_genome, temp)
+    return(result)
+    }, USE.NAMES = T, simplify = F)
+}
+
+H3K9ac_ranges_1to2_count <- count_ol(H3K9ac_ranges_1to2, final_reference_hg19_2128)
+
+names(H3K9ac_ranges_1to2_count)
+H3K9ac_ranges_1to2_count[[2]][1:100]
+```
+Final table with all markers and biosamples:
+```{r}
+all_markers_ranges_count_template_final <- read.csv("https://raw.githubusercontent.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/main/all_markers_ranges_count_template_final.csv")
+
+dim(all_markers_ranges_count_template_final)
+head(all_markers_ranges_count_template_final)
+```
+
+
+
