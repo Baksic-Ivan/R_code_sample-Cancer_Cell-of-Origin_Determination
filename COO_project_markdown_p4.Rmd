@@ -1,0 +1,183 @@
+---
+title: '**R Code sample part 4**'
+author: "Ivan Baksic"
+date:
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+## 4) Random Forest regression and result interpretation
+
+In this part I performed Random Forest regression for a subset of biosamples as an example and displayed result plots for all biosample models. I compared Rsquared Values of different biosample models and correctly determined melanoma cell-of-origin.
+
+Packages used
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(caret)
+library(ranger)
+library(forcats)
+```
+
+I loaded data frame created in part 3 that contains window counts for chromatin marks and melanoma SNP mutations for each biosample
+```{r}
+SKCA_BR_full_WGS_SNP_table_no_out <- readRDS(url("https://github.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/raw/main/SKCA_BR_full_WGS_SNP_table_no_out.RDS"))
+head(SKCA_BR_full_WGS_SNP_table_no_out$`Adipose Nuclei`)
+```
+
+### Model building
+
+I performed 10-fold cross validation Random Forest regression on all biosamples with chromatin mark counts as predictor variables and melanoma SNP mutation count as response variable.  
+As an example I created Random Forest regression models on the first two biosamples:
+```{r}
+set.seed(52)
+my_analysis <- function (input) {
+  sapply(input, function (x) {
+    control <- trainControl(method="cv", number=10,returnResamp="final", savePredictions = "final")
+    result <- train(mutation ~ .,
+                 data = x,
+                 method = "ranger",
+                 tuneLength = 10,
+                 trControl = control,
+                 num.trees = 100,
+                 importance = "permutation",
+                 metric = "Rsquared")
+    return(list(max(result$results$Rsquared), result$pred, result$resample))
+  }, USE.NAMES = T)
+}
+SKCA_BR_full_WGS_SNP_table_no_out_2model <- my_analysis(SKCA_BR_full_WGS_SNP_table_no_out[1:2])
+SKCA_BR_full_WGS_SNP_table_no_out_2model
+```
+
+For each biosample there are several results.  
+First row represents model Rsquared value:
+```{r}
+SKCA_BR_full_WGS_SNP_table_no_out_2model[1, 1] %>%
+  unlist(.)
+```
+Second row contains data frame with observed and predicted values
+```{r}
+SKCA_BR_full_WGS_SNP_table_no_out_2model[[2, 1]] %>%
+  head(.)
+```
+
+Third row contains RMSE and Rsquared values for each CV Fold.
+```{r}
+SKCA_BR_full_WGS_SNP_table_no_out_2model[[3, 1]]
+```
+
+### Biosample comparison
+
+I loaded Random Forest regression results for all 104 biosamples.
+```{r}
+SKCA_BR_full_WGS_SNP_table_no_out_104model <- readRDS(url("https://github.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/raw/main/SKCA_BR_full_WGS_SNP_table_no_out_104model.RDS"))
+```
+
+I compared Rsquared values between all 104 biosamples.
+```{r, fig.height = 9, fig.width = 11}
+plot_biosamples_score <- function (Rsquared_result) {
+  
+  # extract data frame of R2 results for every biosample
+  Rsquared_result_table <- Rsquared_result[1, ] %>% unlist(.) %>%
+    data.frame(Rsquared = ., biosample = names(.)) %>%
+    mutate(., Rsquared = Rsquared*100) %>%
+    # arrange it in descending order
+    arrange(., desc(Rsquared))
+  
+  my_samples <- read.csv("https://raw.githubusercontent.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/main/biomarker_list.csv")
+  
+  #add group names to result data frame from biomarker data frame based on biosample column
+  Rsquared_result_gg <- my_samples %>% mutate(., biosample = Final.name) %>%
+    left_join(Rsquared_result_table, ., by = "biosample")
+  
+  # get the position of the second best group of biosamples needed for the full horizontal line
+  second_group <- filter(Rsquared_result_gg, Final.group != Final.group[1])
+  second_group_pos <- nrow(Rsquared_result_gg) - nrow(second_group) + 1
+  
+  plot <- Rsquared_result_gg %>%
+    # map biosamples to descending order of Rsquared column
+    mutate(biosample = forcats::fct_reorder(biosample, dplyr::desc(Rsquared))) %>%
+    
+    #CREATE PLOT
+    ggplot(aes(x = biosample, y = Rsquared, fill = Final.group)) +
+    
+    # create bar chart
+    geom_col(width = 0.8) +
+    
+    #adjust themes and axis labels
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust = 1, size = 9), aspect.ratio = 1/6,
+          panel.background = element_rect(colour = "black"),
+          legend.position = "bottom") +
+    
+    # add horizontal lines at median and second best biosample group
+    geom_hline(aes(yintercept = median(Rsquared)), linetype = 2) +
+    geom_hline(aes(yintercept = sort(Rsquared, decreasing = T)[second_group_pos]), size = 1) +
+    
+    # paint the bars by the biosample group
+    guides(fill = guide_legend(title = "Cell type group")) +
+    
+    # add second y axis
+    scale_y_continuous(name = "% variance explained",
+                       sec.axis = sec_axis(~((. - median(Rsquared_result_table$Rsquared)))/mad(Rsquared_result_table$Rsquared), 
+                                           name = "Robust ẑ-score", 
+                                           breaks = c (-4, -2, 0, 2, 4, 6, 8, 10))) +
+    theme(axis.title.y = element_text(size = rel(1))) +
+    labs(x = "Cell type")
+  
+  return(plot)
+}
+
+plot_biosamples_score(SKCA_BR_full_WGS_SNP_table_no_out_104model)
+```
+
+Plot description:  
+Solid horizontal line describes variance explained reported by the next-best cell type model that belong to the different cell type group. Dotted horizontal line indicates median variance explained value of all the cell type models. Right-hand (secondary) y-axis shows robust ẑ-score. Bars are colored by histological group.
+
+From this result I can observe that biosamples Melanocyte 03 and Melanocyte 01 have considerably higher Rsquared value than the rest of the biosample models. In order to prove this I performed WMW pair test between neighbouring biosamples based on their fold Rsquared results.
+
+```{r}
+compare_biosamples <- function (input) {
+  
+  input_result_table <- input[1, ] %>% unlist(.) %>%
+    data.frame(Rsquared = ., biosample = names(.)) %>%
+    # arrange it in descending order
+    arrange(., desc(Rsquared))
+  
+  
+  biosamples_ordered <- input_result_table$biosample
+  
+  result <- sapply(1:(length(biosamples_ordered) - 1), function(i) {
+    
+    # get Rsquared for each fold for certain biosample
+    t1 <- input[[3, biosamples_ordered[i]]] %>%
+      arrange(., Resample) %>% .$Rsquared
+    
+    # get Rsquared for each fold for neighbour biosample
+    t2 <- input[[3, biosamples_ordered[i + 1]]] %>%
+      arrange(., Resample) %>% .$Rsquared
+    
+    wilcox_result <- wilcox.test(t1, t2, paired = T)
+    return(list(biosamples_ordered[i], biosamples_ordered[i + 1], wilcox_result$p.value))
+  })
+  return(result)
+}
+
+WMW_test_biosamples <- compare_biosamples(SKCA_BR_full_WGS_SNP_table_no_out_104model)
+
+WMW_test_biosamples[,1:5]
+```
+First two rows represent biosample neighbours and the third row represents WNW paired test p-value.
+
+
+Next, I checked which of the pairs has statistically significant different Rsquared value.
+```{r}
+WMW_test_biosamples[,WMW_test_biosamples[3,] %>% unlist(.) <= 0.03]
+```
+The only statistically significant different Rsquared value is between biosample Melanocyte 01 Fetal Kidney.
+
+Finally, I concluded that the cell type that fits the model with the highest prediction accuracy (Melanocyte) and significantly differs from the next-best histologically unrelated cell type (Fetal Kidney) is the correct cell-of-origin.
