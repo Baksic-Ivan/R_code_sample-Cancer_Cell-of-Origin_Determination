@@ -5,7 +5,7 @@ In this work I explored correlation between melanoma single nucleotide polymorph
 
 #### This project is seperated in five parts:
 In **Part One** I dowloaded reference genome and divided it into 1 megabase windows.  
-**Part Two**  contains chromatin mark data download for seven histone modifications and overlap count with the divided reference genome. 
+**Part Two**  contains chromatin mark data download for seven histone modifications and overlap count with the divided reference genome.  
 In **Part Three**  I demonstrated melanoma SNP mutation data filtration and overlap count with the reference genome.  
 In **Part Four** I performed Random Forest regression analysis, visualised the results, performed statistics and determined the correct cell-of-origin.  
 **Part Five** contains additional plots in order to observe correlation between SNP mutation and chromatin marks.
