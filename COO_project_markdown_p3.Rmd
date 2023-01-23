@@ -1,5 +1,5 @@
 ---
-title: '**R Code sample part 2**'
+title: '**R Code sample part 3**'
 author: "Ivan Baksic"
 date:
 output: html_document
