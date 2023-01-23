@@ -1,0 +1,205 @@
+---
+title: '**R Code sample part 5**'
+author: "Ivan Baksic"
+date:
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+## 5) Additional plots
+
+In this part I displayed additional result plots.  
+I plotted Spearman’s rank correlation coefficient between mutation and chromatin marks for every biosample individually.  
+I also plotted melanoma SNP mutation window count vs chromatin marks peak count and compared their Spearman’s rank correlation coefficient for the top biosample.  
+Finally, I plotted observed vs predicted values for the top biosample model.
+
+Packages used
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(forcats)
+library(ggtext)
+```
+
+I loaded mark and mutation count data used in model building and Random Forest regression results for all 104 biosamples.
+```{r}
+SKCA_BR_full_WGS_SNP_table_no_out <- readRDS(url("https://github.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/raw/main/SKCA_BR_full_WGS_SNP_table_no_out.RDS"))
+
+SKCA_BR_full_WGS_SNP_table_no_out_104model <- readRDS(url("https://github.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/raw/main/SKCA_BR_full_WGS_SNP_table_no_out_104model.RDS"))
+```
+
+Spearman’s rank correlation coefficient between mutation and chromatin marks for every biosample.
+```{r, fig.height = 13, fig.width = 13}
+plot_sm_corelations <- function (Rsquared_result, input_table) {
+  
+  # create a table of spearman correlations
+  cor_table <- sapply(input_table, function (x){
+    
+    # apply function on mark columns
+    cor_results <- sapply(1:(ncol(x) - 1), function(y){
+      
+      # select mutation column
+      last <- x[, ncol(x)] %>% unlist(.)
+      
+      # select mark column
+      mark <- x[, y] %>% unlist(.)
+      
+      # determine spearman correlation
+      result <- cor(mark, last, method = "spearman")
+      names(result) <- colnames(x)[y]
+      return(result)
+      }) %>% round(., 2)
+  }) %>%
+    bind_rows(., .id = "biosample")
+  
+  # get marker names
+  marker_names <- colnames(cor_table)[-1]
+  
+  # extract data frame of R2 results for every biosample and
+  Rsquared_result_table <- Rsquared_result[1, ] %>% unlist(.) %>%
+    data.frame(Rsquared = ., biosample = names(.)) %>%
+    mutate(., Rsquared = Rsquared*100) %>%
+    # arrange it in descending order
+    arrange(., desc(Rsquared))
+  
+  my_samples <- read.csv("https://raw.githubusercontent.com/Baksic-Ivan/R_code_sample-Cancer_Cell-of-Origin_Determination/main/biomarker_list.csv")
+  
+  Rsquared_result_gg <- my_samples %>% mutate(., biosample = Final.name) %>%
+    #add group names to result data frame from biomarker data frame based on biosample column
+    left_join(Rsquared_result_table, ., by = "biosample") %>%
+    #add spearman correlation columns based on biosample column
+    left_join(., cor_table, by = "biosample")
+  
+  plot <- Rsquared_result_gg %>%
+    # map biosamples to descending order of Rsquared column
+    mutate(biosample = forcats::fct_reorder(biosample, dplyr::desc(Rsquared))) %>%
+    
+    # transpose data frame
+    pivot_longer(., cols = marker_names, names_to = "marker", values_to = "spearman") %>%
+    
+    # CREATE PLOT
+    # fill biosample bars by their group
+    ggplot(aes(x = biosample, y = spearman, fill = Final.group)) +
+    
+    # create bar plot
+    geom_col(width = 0.7, color = "black") +
+    #scale_y_continuous(expand = c(0,0)) +
+    
+    # set theme
+    theme_bw() +
+    
+    # form matrix of panels by marker column
+    facet_grid(vars(marker), scales = "free") +
+    
+    # set biosample names vertical
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust = 1, size = 9), aspect.ratio = 1/10,
+          panel.grid.major = element_line(colour = "white"),
+          panel.grid.minor = element_line(colour = "white"),
+          legend.position="bottom") +
+    
+    # label axis
+    xlab("Cell type") +
+    ylab("Spearman's rank correlation coefficient")
+
+  
+  return(plot)
+}
+
+plot_sm_corelations(SKCA_BR_full_WGS_SNP_table_no_out_104model, SKCA_BR_full_WGS_SNP_table_no_out)
+```
+
+I observed that SNP mutation in Melanoma group positively correlates with H3K27me3, H3K4me3 and H3K9me3, chromatin marks responsible for decrease in DNA access and negatively correlates with H3K27ac, H3K36me3 and H3K4me1, chromatin marks responsible for increased in DNA access. This means that in melanoma SNP mutations are more likely to accumulate closed chromatin regions.  
+
+To visualise this correlation, I plotted melanoma SNP mutation window count vs chromatin marks peak count for the top biosample (Melanocyte 03).  
+```{r}
+mark_VS_mutation_plots <- function(input_table){
+  
+  # transpose input data frame into longer format
+  mark_table <- rename(input_table,
+                       tumor_count_per_1Mb_window = mutation) %>%
+    pivot_longer(.,
+                 cols = -tumor_count_per_1Mb_window,
+                 names_to = "chromatin_mark",
+                 values_to = "mark_count_per_1Mb_window")
+  
+  # apply function on mark columns
+  spearman_score <- sapply(1:(ncol(input_table) - 1), function(x){
+    # select mutation column
+    last <- input_table[, ncol(input_table)] %>% unlist(.)
+    # select mark column
+    mark <- input_table[, x] %>% unlist(.)
+    # determine spearman correlation
+    result <- cor(mark, last, method = "spearman")
+    return(result)
+    }) %>% round(., 2)
+  
+  # assign markers to their scores
+  spearman_names <- setdiff(names(input_table), "mutation")
+  spearman_df <- data.frame(score = paste("ρ = ", spearman_score, sep = ""),
+                          chromatin_mark = spearman_names)
+  
+  f_table <- inner_join(mark_table, spearman_df, by = "chromatin_mark")
+  
+  # create mark count vs tumor count plot
+  ggplot(f_table, aes(x = mark_count_per_1Mb_window, y = tumor_count_per_1Mb_window)) +
+    geom_point(size = 0.2) +
+    theme_bw() +
+    
+    # add spearman score
+    geom_text(mapping = aes(x = max(mark_count_per_1Mb_window) * 0.85,
+                            y = max(tumor_count_per_1Mb_window) * 0.95,
+                            label = score)) +
+    
+    # mark dot density by color
+    geom_density_2d_filled(aes(alpha = after_stat(as.factor(..level..))), contour_var = "count", show.legend = F) +
+    
+    # form matrix of panels by marker column
+    facet_wrap(vars(chromatin_mark)) +
+    
+     #label axis
+    xlab("Peaks per Mb") +
+    ylab("Mutations per Mb")
+}
+
+mark_VS_mutation_plots(SKCA_BR_full_WGS_SNP_table_no_out$`Melanocyte 03`)
+```
+
+At the end, I plotted observed versus predicted mutation values for the best model (Melanocyte 03).
+```{r}
+plot_best_obs_pred <- function (Rsquared_result) {
+  
+  # get biosample with highest Rsquared
+  max_biosample <- Rsquared_result[1,] %>%
+    unlist(.) %>%
+    which.max(.) %>%
+    names(.)
+  
+  # CREATE PLOT
+  plot <- Rsquared_result[2, max_biosample][[1]] %>%
+    
+    # point plot of observed vs predicted values
+    ggplot(., aes(x = obs, y = pred)) +
+    geom_point() +
+    
+    # theme and plot ratio selection
+    theme_bw() +
+    theme(aspect.ratio = 1/1) +
+    
+    #name lables
+    xlab("Observed mutations per Mb") +
+    ylab("Predicted mutations per Mb") +
+    
+    # add Rsquared value on the plot
+    geom_richtext(mapping = aes(x = max(obs) * 0.85,
+                            y = min(pred) * 1.2,
+                            label = paste("R<sup>2</sup> = ", round(Rsquared_result[[1, max_biosample]], 2), sep = "")))
+  return(plot)
+}
+
+plot_best_obs_pred(SKCA_BR_full_WGS_SNP_table_no_out_104model)
+
+```
